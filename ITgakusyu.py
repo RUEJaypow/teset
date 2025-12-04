@@ -36,7 +36,7 @@ EXTERNAL_PROGRAM = "pushup_counter.py"
 # ───────────────────────────────
 class QuizLogic:
     """
-    AIとの通信やクイズの正誤判定、CSV読み込みを担当するクラス
+    AIとの通信やクイズの正誤判定、Excel読み込みを担当するクラス
     """
     def __init__(self):
         self.client = OpenAI(
@@ -45,17 +45,18 @@ class QuizLogic:
             http_client=httpx.Client(verify=False, timeout=60.0),
         )
 
-    def load_random_csv_data(self, filepath, num_samples=5):
+    def load_random_excel_data(self, filepath, num_samples=5):
         """
-        CSVファイルを読み込み、ランダムに数行を抽出してテキストとして返す
-        pandasを使用してShift-JISで読み込む
+        Excelファイルを読み込み、ランダムに数行を抽出してテキストとして返す
+        pandasを使用して読み込む (.xlsx形式)
         """
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"ファイルが見つかりません: {filepath}")
 
         try:
-            # pandasを使用してShift_JISで読み込み (header=Noneですべてデータとして扱う)
-            df = pd.read_csv(filepath, encoding='shift_jis', header=None)
+            # pandasを使用してExcelを読み込み (header=Noneですべてデータとして扱う)
+            # Excel読み込みには 'openpyxl' ライブラリが必要です
+            df = pd.read_excel(filepath, header=None)
             
             if df.empty:
                 return "データがありません。"
@@ -66,19 +67,19 @@ class QuizLogic:
             else:
                 sampled_df = df
             
-            # データフレームをCSV形式の文字列に変換して返す（インデックスとヘッダーは含めない）
+            # AIへのプロンプトにはCSV形式の文字列として渡すと理解しやすいため変換して返す
             return sampled_df.to_csv(index=False, header=False)
 
         except Exception as e:
-            raise RuntimeError(f"CSV読み込みエラー: {e}")
+            raise RuntimeError(f"Excel読み込みエラー: {e}")
 
-    def generate_quiz(self, difficulty, csv_filename):
+    def generate_quiz(self, difficulty, filename):
         """
-        指定されたCSVファイルの内容に基づいてAIで問題を生成する
+        指定されたExcelファイルの内容に基づいてAIで問題を生成する
         """
-        # CSVデータを取得
+        # Excelデータを取得
         try:
-            csv_content = self.load_random_csv_data(csv_filename)
+            data_content = self.load_random_excel_data(filename)
         except Exception as e:
             print(e)
             return None
@@ -86,17 +87,18 @@ class QuizLogic:
         # プロンプト作成
         base_instruction = f"""
         あなたはクイズ作成AIです。
-        以下の【CSVデータ】の内容**のみ**に基づいて、クイズを1問作成してください。
-        問題の形式としては、文章列の文章からキーワード1**または**キーワード2を○○に変換して生成してください。
+        以下の【学習データ】の内容**のみ**に基づいて、クイズを1問作成してください。
+        問題の形式としては、文章列の文章からキーワード1**または**キーワード2を題材として問題を生成してください。
         外部知識は使用しないでください。
         
-        【CSVデータ】
-        {csv_content}
+        【学習データ】
+        {data_content}
         """
 
         if difficulty == "初級":
             prompt = base_instruction + """
             初級レベルの三択問題を生成してください。
+            選択肢として挙げられる単語は、答えの単語と役割や機能が似ているものにしてください。
             JSONのみで出力:
             {
               "question": "問題文",
@@ -107,7 +109,7 @@ class QuizLogic:
         elif difficulty == "中級":
             prompt = base_instruction + """
             中級レベルの単語入力問題（記述式）を生成してください。
-            答えはCSVデータに含まれる単語にしてください。
+            答えは学習データに含まれる単語にしてください。
             JSONのみで出力:
             {
               "question": "問題文",
@@ -161,13 +163,14 @@ class QuizApp:
         self.logic = QuizLogic() 
         
         # 基本ウィンドウ設定
-        root.title("CSVデータ クイズ生成機")
+        root.title("Excelデータ クイズ生成機")
         root.geometry("600x600")
         root.configure(bg=COLOR_BG)
 
         # 状態管理変数
         self.difficulty_var = tk.StringVar(value="初級")
-        self.csv_file_var = tk.StringVar(value="data.csv") # デフォルトCSVファイル名
+        # デフォルトファイルをxlsxに変更
+        self.file_var = tk.StringVar(value="data.xlsx") 
         self.current_quiz = None
         self.correct_count = 0
         self.wrong_count = 0
@@ -207,7 +210,9 @@ class QuizApp:
             bg=COLOR_BG, activebackground=COLOR_BG, font=("Yu Gothic", 11)
         ).pack(side=tk.LEFT, padx=10)
 
-        # CSVファイル設定は非表示（デフォルトの data.csv を使用）
+        # ファイル名入力欄（オプション：変更可能にする場合）
+        # tk.Label(self.root, text="読み込むExcelファイル:", bg=COLOR_BG).pack(pady=(20, 0))
+        # tk.Entry(self.root, textvariable=self.file_var).pack()
 
         # スタートボタン
         tk.Button(
@@ -221,11 +226,11 @@ class QuizApp:
     def start_quiz(self):
         """クイズの初期化と開始"""
         self.difficulty = self.difficulty_var.get()
-        self.csv_filename = self.csv_file_var.get()
+        self.filename = self.file_var.get()
         
         # ファイル存在チェック
-        if not os.path.exists(self.csv_filename):
-            messagebox.showerror("エラー", f"ファイル '{self.csv_filename}' が見つかりません。")
+        if not os.path.exists(self.filename):
+            messagebox.showerror("エラー", f"ファイル '{self.filename}' が見つかりません。\n実行フォルダに配置してください。")
             return
 
         # カウンターリセット
@@ -258,14 +263,14 @@ class QuizApp:
         # 問題生成
         quiz = None
         for _ in range(5): # リトライ回数
-            quiz = self.logic.generate_quiz(self.difficulty, self.csv_filename)
+            quiz = self.logic.generate_quiz(self.difficulty, self.filename)
             if quiz and quiz["question"] not in self.asked_questions:
                 break
         
         loading_label.destroy()
 
         if not quiz:
-            messagebox.showerror("エラー", "問題生成に失敗しました。\nCSVファイルの内容を確認してください。")
+            messagebox.showerror("エラー", "問題生成に失敗しました。\nExcelファイルの内容を確認してください。")
             self.show_final_result()
             return
 
@@ -393,4 +398,3 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = QuizApp(root)
     root.mainloop()
-    
